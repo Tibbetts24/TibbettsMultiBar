@@ -1,0 +1,12 @@
+## Interface: 110000
+## Title: Tibbetts' MultiBar
+## TibbettsMultiBarFlavor: Retail (Mainline)
+## Notes: XP + Reputation bar replacement with Blizzard-style ticks, profiles, and full appearance controls.
+## Author: Wilford Tibbetts
+## Version: 1.0.0
+## SavedVariables: TibbettsMultiBarDB, TibbettsMultiBarSV
+## SavedVariablesPerCharacter: TibbettsMultiBarCharSV
+
+TibbettsMultiBar.lua
+TibbettsMultiBar_Picker.lua
+TibbettsMultiBar_Config.lua

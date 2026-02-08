@@ -1,0 +1,11 @@
+## Interface: 99999
+## Title: TibbettsMultiBar
+## Notes: XP + Reputation bar replacement with Blizzard-style ticks, profiles, and full appearance controls.
+## Author: LordTibbetts
+## Version: 1.0.1
+## SavedVariables: TibbettsMultiBarDB, TibbettsMultiBarSV
+## SavedVariablesPerCharacter: TibbettsMultiBarCharSV
+
+TibbettsMultiBar.lua
+TibbettsMultiBar_Picker.lua
+TibbettsMultiBar_Config.lua

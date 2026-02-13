@@ -119,11 +119,12 @@ local function LayoutTicks(container, bar, count, alpha, show)
     for i=1, lines do
         local tex = container.ticks[i]
         if not tex then
-            tex = bar:CreateTexture(nil, "OVERLAY")
+            tex = bar:CreateTexture(nil, "BACKGROUND")
             container.ticks[i] = tex
         end
 
         tex:SetTexture(texPath)
+        if tex.SetDrawLayer then tex:SetDrawLayer("BACKGROUND") end
         if coords then
             tex:SetTexCoord(unpack(coords))
         else
@@ -138,8 +139,8 @@ local function LayoutTicks(container, bar, count, alpha, show)
         local maxLeft = math.floor((width - tickW) + 0.5)
         if left > maxLeft then left = maxLeft end
 
-        tex:SetPoint("TOPLEFT", bar, "TOPLEFT", left, 0)
-        tex:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", left, 0)
+        tex:SetPoint("TOPLEFT", bar, "TOPLEFT", left, -1)
+        tex:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", left, 1)
         tex:SetWidth(tickW)
         tex:SetAlpha(alpha)
         tex:Show()
@@ -151,6 +152,116 @@ end
 
 
 local addonName, addon = ...
+
+-- ------------------------------------------------------------
+-- Profiles (lightweight, no AceDB required)
+-- ------------------------------------------------------------
+local function GetCharKey()
+    local name = UnitName("player") or "Player"
+    local realm = (GetRealmName and GetRealmName()) or "Realm"
+    return name .. "-" .. realm
+end
+
+local function EnsureProfileTables()
+    _G.TibbettsMultiBarDB = _G.TibbettsMultiBarDB or {}
+    local sv = _G.TibbettsMultiBarDB
+    sv.profiles = sv.profiles or {}
+    sv.profileKeys = sv.profileKeys or {}
+    if sv.useGlobalProfile == nil then sv.useGlobalProfile = true end
+    if sv.globalProfileName == nil then sv.globalProfileName = "Default" end
+    -- Ensure Default profile exists
+    sv.profiles["Default"] = sv.profiles["Default"] or {}
+    sv.profiles[sv.globalProfileName] = sv.profiles[sv.globalProfileName] or {}
+    local ck = GetCharKey()
+    if sv.useGlobalProfile then
+        sv.profileKeys[ck] = sv.globalProfileName or "Default"
+    else
+        sv.profileKeys[ck] = sv.profileKeys[ck] or "Default"
+        sv.profiles[sv.profileKeys[ck]] = sv.profiles[sv.profileKeys[ck]] or {}
+    end
+    return sv
+end
+
+function addon.GetProfileName()
+    local sv = EnsureProfileTables()
+    local ck = GetCharKey()
+    return sv.profileKeys[ck] or "Default"
+end
+
+function addon.GetProfiles()
+    local sv = EnsureProfileTables()
+    local names = {}
+    for name in pairs(sv.profiles) do names[#names+1] = name end
+    table.sort(names, function(a,b) return tostring(a):lower() < tostring(b):lower() end)
+    return names
+end
+
+function addon.SetUseGlobalProfile(enabled)
+    local sv = EnsureProfileTables()
+    sv.useGlobalProfile = enabled and true or false
+    -- Rebind this character to Default when enabled
+    if sv.useGlobalProfile then
+        sv.profileKeys[GetCharKey()] = sv.globalProfileName or "Default"
+    end
+end
+
+function addon.GetGlobalProfileName()
+    local sv = EnsureProfileTables()
+    return sv.globalProfileName or "Default"
+end
+
+function addon.SetGlobalProfileName(name)
+    if not name or name == "" then return end
+    local sv = EnsureProfileTables()
+    sv.globalProfileName = name
+    sv.profiles[name] = sv.profiles[name] or {}
+    if sv.useGlobalProfile then
+        sv.profileKeys[GetCharKey()] = name
+    end
+end
+
+
+function addon.SetProfile(name)
+    if not name or name == "" then return end
+    local sv = EnsureProfileTables()
+    sv.profiles[name] = sv.profiles[name] or {}
+    sv.profileKeys[GetCharKey()] = name
+end
+
+function addon.CopyProfile(fromName, toName)
+    if not fromName or not toName or fromName == "" or toName == "" then return end
+    local sv = EnsureProfileTables()
+    if not sv.profiles[fromName] then return end
+    sv.profiles[toName] = {}
+    for k,v in pairs(sv.profiles[fromName]) do
+        if type(v) == "table" then
+            local t = {}
+            for kk,vv in pairs(v) do t[kk]=vv end
+            sv.profiles[toName][k]=t
+        else
+            sv.profiles[toName][k]=v
+        end
+    end
+end
+
+function addon.DeleteProfile(name)
+    if not name or name == "" or name == "Default" then return end
+    local sv = EnsureProfileTables()
+    sv.profiles[name] = nil
+    -- Move any chars using it back to Default
+    for ck,pn in pairs(sv.profileKeys) do
+        if pn == name then sv.profileKeys[ck] = sv.globalProfileName or "Default" end
+    end
+end
+
+function addon.GetDB()
+    local sv = EnsureProfileTables()
+    local pname = addon.GetProfileName()
+    sv.profiles[pname] = sv.profiles[pname] or {}
+    return sv.profiles[pname]
+end
+
+
 
 -- Solid color helper (cross-client safe: avoids Texture:SetColorTexture signature differences)
 local function SetSolidColor(tex, r, g, b, a)
@@ -255,6 +366,7 @@ local defaults = {
     hideInCombat = false,
     pixelSnap = true,
     barColor = { r = 0.0, g = 0.6, b = 1.0, a = 1.0 },
+    repBarColor = nil, -- nil = follow XP bar color
     bgAlpha = 0.5,
     repBgAlpha = 0.5,
     bgColor = { r = 0, g = 0, b = 0, a = 0.5 },
@@ -275,21 +387,21 @@ local defaults = {
     restedColor = { r = 0.6, g = 0.0, b = 1.0, a = 0.6 },
 }
 
-local function ApplyDefaults()
-    _G.TibbettsMultiBarDB = _G.TibbettsMultiBarDB or {}
+local function ApplyDefaultsTo(db)
+    if type(db) ~= "table" then return end
 
     for k, v in pairs(defaults) do
-        local cur = TibbettsMultiBarDB[k]
+        local cur = db[k]
 
         if cur == nil then
             if type(v) == "table" then
-                TibbettsMultiBarDB[k] = DeepCopy(v, {})
+                db[k] = DeepCopy(v, {})
             else
-                TibbettsMultiBarDB[k] = v
+                db[k] = v
             end
         elseif type(v) == "table" then
             if type(cur) ~= "table" then
-                TibbettsMultiBarDB[k] = DeepCopy(v, {})
+                db[k] = DeepCopy(v, {})
             else
                 for kk, vv in pairs(v) do
                     if cur[kk] == nil then
@@ -299,6 +411,12 @@ local function ApplyDefaults()
             end
         end
     end
+
+local function EnsureDB()
+    _G.TibbettsMultiBarDB = _G.TibbettsMultiBarDB or {}
+    ApplyDefaultsTo(_G.TibbettsMultiBarDB)
+end
+
 end
 
 
@@ -306,8 +424,13 @@ end
 
 local function EnsureDB()
     _G.TibbettsMultiBarDB = _G.TibbettsMultiBarDB or {}
-    ApplyDefaults()
-    return _G.TibbettsMultiBarDB
+    -- Ensure root defaults for profile bookkeeping
+    if ApplyDefaultsTo then ApplyDefaultsTo(_G.TibbettsMultiBarDB) end
+
+    -- Prefer active profile DB if available
+    local db = (_G.addon and _G.addon.GetDB and _G.addon.GetDB()) or (addon and addon.GetDB and addon.GetDB()) or _G.TibbettsMultiBarDB
+    ApplyDefaultsTo(db)
+    return db
 end
 
 function addon:SaveXPPosition()
@@ -519,7 +642,7 @@ end
 
 
 local function ConfigureRepDragging()
-    local db = TibbettsMultiBarDB or {}
+    local db = (addon and addon.GetDB and addon.GetDB()) or (TibbettsMultiBarDB or {})
     if not addon.repFrame then return end
     local rf = addon.repFrame
 
@@ -619,7 +742,7 @@ end
 
 function addon.UpdateReputation()
     if not bar or not repBar then return end
-    local db = TibbettsMultiBarDB or {}
+    local db = (addon and addon.GetDB and addon.GetDB()) or (TibbettsMultiBarDB or {})
     local show = db.showRep ~= false
 
     local atMax = false
@@ -634,7 +757,7 @@ local name, barMin, barMax, barValue
 do
     local f = _G.GetWatchedFactionInfo
     if type(f) == "function" then
-        local ok, n, _, _, mn, mx, val = pcall(f)
+        local ok, n, _, mn, mx, val = pcall(f)
         if ok then
             name = n
             barMin, barMax, barValue = mn, mx, val
@@ -907,6 +1030,51 @@ if db.locked and addon.bar and addon.bar.GetPoint then
     end
 end
 
+
+-- Link XP and Reputation appearance settings (cross-client safe).
+-- TBC/Classic users often want the two bars to match exactly.
+if db.linkBars == nil then db.linkBars = true end
+if db.linkBars then
+
+-- Keep Reputation position/locking in sync with XP (lockstep).
+db.repLocked   = db.locked
+db.repPoint    = db.point
+db.repRelPoint = db.relPoint
+db.repX        = db.x
+-- Keep Rep stacked above/below XP using repAbove + repGap (do NOT hard-link repY).
+local gap = tonumber(db.repGap) or 2
+local sep = ((tonumber(db.height) or 8) + gap) * (tonumber(db.scale) or 1)
+if db.repAbove then
+    db.repY = db.y + sep
+else
+    db.repY = db.y - sep
+end
+db.repClamp    = db.clamp
+db.repSnap     = db.pixelSnap
+    -- Keep Reputation appearance in sync with XP appearance.
+    db.repTexture     = db.texture
+    db.repTextureName = db.textureName
+    db.repFont        = db.font
+    db.repFontName    = db.fontName
+    db.repFontSize    = db.fontSize
+    db.repFontOutline = db.fontOutline
+
+    db.repColor       = db.barColor
+    db.repBgColor     = db.bgColor
+    db.repBgAlpha     = db.bgAlpha
+    db.repTextColor   = db.textColor
+
+    db.repShowBorder  = db.showBorder
+
+    db.repShowTicks   = db.showTicks
+    db.repTickCount   = db.tickCount
+    db.repTickAlpha   = db.tickAlpha
+
+    db.repWidth       = db.width
+    db.repHeight      = db.height
+    db.repScale       = db.scale
+end
+
     if not bar then return end
 
     -- Hide/show Blizzard XP bar safely
@@ -1083,9 +1251,12 @@ end
 
         -- Rep border / ticks (separate toggles)
         if db.repShowBorder == nil then db.repShowBorder = db.showBorder end
-        if db.repShowTicks == nil then db.repShowTicks = db.showTicks end
-        if db.repTickCount == nil then db.repTickCount = db.tickCount end
-        if db.repTickAlpha == nil then db.repTickAlpha = db.tickAlpha end
+
+        -- Keep Reputation ticks identical to XP ticks so the bars match visually.
+        -- (Older profiles may have separate repTickCount/repShowTicks values; we intentionally mirror XP here.)
+        db.repShowTicks = db.showTicks and true or false
+        db.repTickCount = tonumber(db.tickCount) or 10
+        db.repTickAlpha = tonumber(db.tickAlpha) or 0.25
 
         UpdateBorderAndTicks(rb, {showBorder=db.repShowBorder, showTicks=db.repShowTicks, tickCount=db.repTickCount, tickAlpha=db.repTickAlpha, pixelSnap=db.pixelSnap})
 
@@ -1108,9 +1279,9 @@ end
     LayoutTicks(bar._ticks, bar, db.tickCount, db.tickAlpha or 0.25, db.showTicks and true or false)
     if addon.repBar then
         -- Rep can have its own toggles/values; fall back to XP settings if unset
-        local repShow = (db.repShowTicks ~= nil) and (db.repShowTicks and true or false) or (db.showTicks and true or false)
-        local repCount = tonumber(db.repTickCount) or tonumber(db.tickCount) or 10
-        local repAlpha = tonumber(db.repTickAlpha) or tonumber(db.tickAlpha) or 0.25
+        local repShow = db.showTicks and true or false
+        local repCount = tonumber(db.tickCount) or 10
+        local repAlpha = tonumber(db.tickAlpha) or 0.25
         LayoutBorderTextures(addon.repBar._border, addon.repBar, (db.repShowBorder ~= nil) and (db.repShowBorder and true or false) or (db.showBorder and true or false))
         LayoutTicks(addon.repBar._ticks, addon.repBar, repCount, repAlpha, repShow)
     end
@@ -1123,7 +1294,7 @@ f:RegisterEvent("PLAYER_LEVEL_UP")
 f:RegisterEvent("UPDATE_EXHAUSTION")
 f:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_LOGIN" then
-        ApplyDefaults()
+        EnsureDB()
         addon.ApplySettings()
     else
         UpdateBar()
@@ -1231,7 +1402,7 @@ end
 
 -- Relayout tick dividers when bars resize
 bar:SetScript("OnSizeChanged", function()
-    local db = TibbettsMultiBarDB or {}
+    local db = (addon and addon.GetDB and addon.GetDB()) or (TibbettsMultiBarDB or {})
     LayoutTicks(bar._ticks, bar, db.tickCount, db.tickAlpha or 0.25, db.showTicks and true or false)
     LayoutBorderTextures(bar._border, bar, db.showBorder and true or false)
     if addon.repBar then
